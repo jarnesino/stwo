@@ -186,7 +186,7 @@ impl FieldOps<BaseField> for MetalBackend {
             "src/core/backend/metal/batch_inverse.metallib"
         );
         let library = device.new_library_with_file(library_path).unwrap();
-        let function = library.get_function("add_arrays", None).unwrap();
+        let function = library.get_function("base_field_batch_inverse", None).unwrap();
 
         let pipeline_state = device
             .new_compute_pipeline_state_with_function(&function)

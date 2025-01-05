@@ -2,7 +2,7 @@
 
 using namespace metal;
 
-kernel void add_arrays(
+kernel void base_field_batch_inverse(
     const device uint* column [[buffer(0)]],
     device uint* result [[buffer(1)]],
     device uint* size_pointer [[buffer(2)]],
