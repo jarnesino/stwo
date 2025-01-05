@@ -179,8 +179,12 @@ impl<T: Debug + Clone + Default> ColumnOps<T> for MetalBackend {
 
 impl FieldOps<BaseField> for MetalBackend {
     /// Batch inversion using Montgomery's trick.
-    fn batch_inverse(column: &Self::Column, dst: &mut Self::Column) {
+    fn batch_inverse(column: &Self::Column, _dst: &mut Self::Column) {
         let size = column.len();
+        let elements_per_threadgroup: u32 = 512;
+        let number_of_manual_inversions = 32;
+        let shared_element_tree_size = 2 * elements_per_threadgroup - number_of_manual_inversions;
+
         let device = Device::system_default().expect("No Metal device found");
         let library_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
             "src/core/backend/metal/batch_inverse.metallib"
@@ -212,6 +216,16 @@ impl FieldOps<BaseField> for MetalBackend {
             size_of::<u32>() as u64,
             MTLResourceOptions::StorageModeShared,
         );
+        let buffer_shared_element_tree_size = device.new_buffer_with_data(
+            &shared_element_tree_size as *const u32 as *const _,
+            size_of::<u32>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let buffer_log_shared_element_tree_size = device.new_buffer_with_data(
+            &(shared_element_tree_size.ilog2()) as *const u32 as *const _,
+            size_of::<u32>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
 
         let command_buffer = command_queue.new_command_buffer();
         let encoder = command_buffer.new_compute_command_encoder();
@@ -221,8 +235,11 @@ impl FieldOps<BaseField> for MetalBackend {
         encoder.set_buffer(1, Some(&buffer_result), 0);
         encoder.set_buffer(2, Some(&buffer_size), 0);
         encoder.set_buffer(3, Some(&buffer_log_size), 0);
+        encoder.set_buffer(4, Some(&buffer_shared_element_tree_size), 0);
+        encoder.set_buffer(5, Some(&buffer_log_shared_element_tree_size), 0);
+        encoder.set_threadgroup_memory_length(0, shared_element_tree_size as NSUInteger);
 
-        let block_size = 256;
+        let block_size = elements_per_threadgroup as NSUInteger >> 1;
         let threadgroup_size = MTLSize::new(block_size, 1, 1);
         let number_of_blocks = ((size >> 2) as NSUInteger + block_size - 1) / block_size;
         let threadgroup_count = MTLSize::new(number_of_blocks, 1, 1);
@@ -233,7 +250,7 @@ impl FieldOps<BaseField> for MetalBackend {
         command_buffer.wait_until_completed();
 
         let result_ptr = buffer_result.contents() as *const u32;
-        let output = unsafe { std::slice::from_raw_parts(result_ptr, dst.len()) };
+        let output = unsafe { std::slice::from_raw_parts(result_ptr, size) };
         println!("Result: {:?}", output);
     }
 }
