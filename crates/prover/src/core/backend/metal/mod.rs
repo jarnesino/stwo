@@ -8,7 +8,6 @@ use crate::core::air::accumulation::AccumulationOps;
 use crate::core::channel::{Blake2sChannel, Poseidon252Channel};
 use crate::core::circle::{CirclePoint, Coset};
 use super::{Backend, BackendForChannel, Col, ColumnOps, FieldOps};
-use crate::core::fields::Field;
 use crate::core::fields::m31::BaseField;
 use crate::core::fields::qm31::SecureField;
 use crate::core::fields::secure_column::SecureColumnByCoords;
@@ -178,9 +177,10 @@ impl<T: Debug + Clone + Default> ColumnOps<T> for MetalBackend {
     }
 }
 
-impl<F: Field> FieldOps<F> for MetalBackend {
+impl FieldOps<BaseField> for MetalBackend {
     /// Batch inversion using Montgomery's trick.
-    fn batch_inverse(_column: &Self::Column, _dst: &mut Self::Column) {
+    fn batch_inverse(column: &Self::Column, dst: &mut Self::Column) {
+        let size = column.len();
         let device = Device::system_default().expect("No Metal device found");
         let library_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
             "src/core/backend/metal/batch_inverse.metallib"
@@ -193,22 +193,23 @@ impl<F: Field> FieldOps<F> for MetalBackend {
             .unwrap();
         let command_queue = device.new_command_queue();
 
-        let in1 = vec![1.0f32, 2.0, 3.0, 4.0];
-        let in2 = vec![4.0f32, 3.0, 2.0, 1.0];
-        let result = vec![0.0f32; 4];
-
         let buffer_in1 = device.new_buffer_with_data(
-            in1.as_ptr() as *const _,
-            (in1.len() * std::mem::size_of::<f32>()) as u64,
-            MTLResourceOptions::StorageModeShared,
-        );
-        let buffer_in2 = device.new_buffer_with_data(
-            in2.as_ptr() as *const _,
-            (in2.len() * std::mem::size_of::<f32>()) as u64,
+            column.as_ptr() as *const _,
+            (size * size_of::<f32>()) as u64,
             MTLResourceOptions::StorageModeShared,
         );
         let buffer_result = device.new_buffer(
-            (result.len() * std::mem::size_of::<f32>()) as u64,
+            (size * size_of::<f32>()) as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let buffer_size = device.new_buffer_with_data(
+            &(size as u32) as *const u32 as *const _,
+            size_of::<u32>() as u64,
+            MTLResourceOptions::StorageModeShared,
+        );
+        let buffer_log_size = device.new_buffer_with_data(
+            &(size.ilog2()) as *const u32 as *const _,
+            size_of::<u32>() as u64,
             MTLResourceOptions::StorageModeShared,
         );
 
@@ -217,20 +218,29 @@ impl<F: Field> FieldOps<F> for MetalBackend {
 
         encoder.set_compute_pipeline_state(&pipeline_state);
         encoder.set_buffer(0, Some(&buffer_in1), 0);
-        encoder.set_buffer(1, Some(&buffer_in2), 0);
-        encoder.set_buffer(2, Some(&buffer_result), 0);
+        encoder.set_buffer(1, Some(&buffer_result), 0);
+        encoder.set_buffer(2, Some(&buffer_size), 0);
+        encoder.set_buffer(3, Some(&buffer_log_size), 0);
 
-        let threadgroup_size = MTLSize::new(4, 1, 1); // 4 threads (one per element)
-        let threadgroup_count = MTLSize::new(1, 1, 1);
+        let block_size = 256;
+        let threadgroup_size = MTLSize::new(block_size, 1, 1);
+        let number_of_blocks = ((size >> 2) as NSUInteger + block_size - 1) / block_size;
+        let threadgroup_count = MTLSize::new(number_of_blocks, 1, 1);
         encoder.dispatch_threads(threadgroup_size, threadgroup_count);
 
         encoder.end_encoding();
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        let result_ptr = buffer_result.contents() as *const f32;
-        let output = unsafe { std::slice::from_raw_parts(result_ptr, result.len()) };
+        let result_ptr = buffer_result.contents() as *const u32;
+        let output = unsafe { std::slice::from_raw_parts(result_ptr, dst.len()) };
         println!("Result: {:?}", output);
+    }
+}
+
+impl FieldOps<SecureField> for MetalBackend {
+    fn batch_inverse(_column: &Self::Column, _dst: &mut Self::Column) {
+        todo!()
     }
 }
 
@@ -246,8 +256,7 @@ mod tests {
 
     use crate::core::backend::metal::bit_reverse;
     use crate::core::backend::{Column, metal::MetalBackend, FieldOps};
-    use crate::core::fields::qm31::QM31;
-    use crate::core::fields::FieldExpOps;
+    use crate::core::fields::m31::M31;
 
     #[test]
     fn bit_reverse_works() {
@@ -264,9 +273,9 @@ mod tests {
     }
 
     #[test]
-    fn batch_inverse_test() {
+    fn batch_inverse_base_field_test() {
         let mut rng = SmallRng::seed_from_u64(0);
-        let column = rng.gen::<[QM31; 16]>().to_vec();
+        let column = rng.gen::<[M31; 16]>().to_vec();
         let expected = column.iter().map(|e| e.inverse()).collect_vec();
         let mut dst = Column::zeros(column.len());
 

@@ -2,9 +2,18 @@
 
 using namespace metal;
 
-kernel void add_arrays(const device float* in1 [[buffer(0)]],
-                       const device float* in2 [[buffer(1)]],
-                       device float* result [[buffer(2)]],
-                       uint id [[thread_position_in_grid]]) {
-    result[id] = in1[id] + in2[id];
+kernel void add_arrays(
+    const device uint* column [[buffer(0)]],
+    device uint* result [[buffer(1)]],
+    device uint* size_pointer [[buffer(2)]],
+    device uint* log_size_pointer [[buffer(3)]],
+    uint tid [[thread_position_in_threadgroup]],
+    uint id [[thread_position_in_grid]]
+) {
+    threadgroup uint shared_example[256];
+    shared_example[tid] = *log_size_pointer;
+//    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (id < *size_pointer) {
+        result[id] = shared_example[tid];
+    }
 }
