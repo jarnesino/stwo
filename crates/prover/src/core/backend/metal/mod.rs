@@ -179,7 +179,7 @@ impl<T: Debug + Clone + Default> ColumnOps<T> for MetalBackend {
 
 impl FieldOps<BaseField> for MetalBackend {
     /// Batch inversion using Montgomery's trick.
-    fn batch_inverse(column: &Self::Column, _dst: &mut Self::Column) {
+    fn batch_inverse(column: &Self::Column, dst: &mut Self::Column) {
         let size = column.len();
         let elements_per_threadgroup: u32 = 512;
         let number_of_manual_inversions = 32;
@@ -209,22 +209,22 @@ impl FieldOps<BaseField> for MetalBackend {
         let buffer_size = device.new_buffer_with_data(
             &(size as u32) as *const u32 as *const _,
             size_of::<u32>() as u64,
-            MTLResourceOptions::StorageModeShared,
+            MTLResourceOptions::StorageModeShared,  // Check
         );
         let buffer_log_size = device.new_buffer_with_data(
             &(size.ilog2()) as *const u32 as *const _,
             size_of::<u32>() as u64,
-            MTLResourceOptions::StorageModeShared,
+            MTLResourceOptions::StorageModeShared,  // Check
         );
         let buffer_shared_element_tree_size = device.new_buffer_with_data(
             &shared_element_tree_size as *const u32 as *const _,
             size_of::<u32>() as u64,
-            MTLResourceOptions::StorageModeShared,
+            MTLResourceOptions::StorageModeShared,  // Check
         );
         let buffer_log_shared_element_tree_size = device.new_buffer_with_data(
             &(shared_element_tree_size.ilog2()) as *const u32 as *const _,
             size_of::<u32>() as u64,
-            MTLResourceOptions::StorageModeShared,
+            MTLResourceOptions::StorageModeShared,  // Check
         );
 
         let command_buffer = command_queue.new_command_buffer();
@@ -249,9 +249,8 @@ impl FieldOps<BaseField> for MetalBackend {
         command_buffer.commit();
         command_buffer.wait_until_completed();
 
-        let result_ptr = buffer_result.contents() as *const u32;
-        let output = unsafe { std::slice::from_raw_parts(result_ptr, size) };
-        println!("Result: {:?}", output);
+        let result_ptr = buffer_result.contents() as *const BaseField;
+        unsafe{ std::ptr::copy_nonoverlapping(result_ptr, dst.as_mut_ptr(), size); }
     }
 }
 
